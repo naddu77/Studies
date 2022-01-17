@@ -10,6 +10,7 @@
 #include <sstream>
 #include <functional>
 #include <optional>
+#include <fstream>
 
 struct Strings
 {
@@ -43,6 +44,8 @@ struct Strings
     char const* go_main_menu;
     char const* exit_message;
     char const* menu_selection_message;
+    char const* save_error_message;
+    char const* load_error_message;
 };
 
 Strings kor_strings{
@@ -75,7 +78,9 @@ Strings kor_strings{
     .failed{ "작업을 실패했습니다." },
     .go_main_menu{ "메인 메뉴로 돌아가시겠습니까(Y/N)? " },
     .exit_message{ "프로그램을 종료합니다." },
-    .menu_selection_message{ "원하는 메뉴의 번호를 입력 해 주세요" }
+    .menu_selection_message{ "원하는 메뉴의 번호를 입력 해 주세요" },
+    .save_error_message{ "저장에 실패하였습니다." },
+    .load_error_message{ "열기에 실패하였습니다." }
 };
 
 class LocalizedString
@@ -137,11 +142,9 @@ struct ToDoItem
 };
 
 template <typename Elem, typename Traits = std::char_traits<Elem>>
-std::basic_ostream<Elem, Traits>& operator<<(std::basic_ostream<Elem, Traits>& os, ToDoItem const& todo_item)
+std::basic_ostream<Elem, Traits>& operator<<(std::basic_ostream<Elem, Traits>& os, TaskStaus const& task_status)
 {
-    os << "|";
-
-    switch (todo_item.status)
+    switch (task_status)
     {
     case TaskStaus::None:
         os << "None";
@@ -163,6 +166,14 @@ std::basic_ostream<Elem, Traits>& operator<<(std::basic_ostream<Elem, Traits>& o
         break;
     }
 
+    return os;
+}
+
+template <typename Elem, typename Traits = std::char_traits<Elem>>
+std::basic_ostream<Elem, Traits>& operator<<(std::basic_ostream<Elem, Traits>& os, ToDoItem const& todo_item)
+{
+    os << "|";
+    os << todo_item.status;
     os << "|" << todo_item.content << "|";
 
     return os;
@@ -178,6 +189,43 @@ std::basic_ostream<Elem, Traits>& operator<<(std::basic_ostream<Elem, Traits>& o
 
     return os;
 }
+
+//template <typename Elem, typename Traits = std::char_traits<Elem>>
+//std::basic_istream<Elem, Traits>& operator>>(std::basic_istream<Elem, Traits>& is, ToDoItem& todo_item)
+//{
+//    if (std::string line; std::getline(is, line))
+//    {
+//        switch (line.front())
+//        {
+//        case 'N':
+//            task_status = TaskStaus::None;
+//            break;
+//
+//        case 'P':
+//            task_status = TaskStaus::Progress;
+//            break;
+//
+//        case 'D':
+//            task_status = TaskStaus::Done;
+//            break;
+//
+//        case 'E':
+//            task_status = TaskStaus::End;
+//            break;
+//
+//        default:
+//            task_status = TaskStaus::None;
+//            break;
+//        }
+//    }
+//
+//    if (std::string line; std::getline(is, line))
+//    {
+//        todo_item.content = std::move(line);
+//    }
+//
+//    return is;
+//}
 
 namespace std
 {
@@ -500,6 +548,16 @@ public:
         }
     }
 
+    auto begin()
+    {
+        return std::begin(todo_list);
+    }
+
+    auto end()
+    {
+        return std::end(todo_list);
+    }
+
 private:
     ToDoList todo_list;
     History history;
@@ -724,12 +782,74 @@ int main()
         // 5. ToDo List 저장
         .Add(
             lsm.save_todo_list,
-            callback(lsm.save_todo_list)
+            [](MenuManager& menu_manager) {
+                auto const& lsm{ LocalizedString::Get() };
+                std::ofstream ofs("data.dat");
+
+                if (ofs.is_open())
+                {
+                    for (auto const& todo : menu_manager)
+                    {
+                        ofs << todo.status << '\n';
+                        ofs << todo.content << '\n';
+                    }
+                }
+                else
+                {
+                    std::cout << lsm.save_error_message << std::endl;
+                }
+
+                return Result::Done;
+            }
         )
         // 6. ToDo List 열기
         .Add(
             lsm.load_todo_list,
-            callback(lsm.load_todo_list)
+            [](MenuManager& menu_manager) {
+                auto const& lsm{ LocalizedString::Get() };
+                std::ifstream ifs("data.dat");
+
+                if (ifs.is_open())
+                {
+                    ToDoItem todo_item;
+
+                    for (std::string line1, line2; std::getline(ifs, line1) && std::getline(ifs, line2); )
+                    {
+                        TaskStaus task_status;
+
+                        switch (line1.front())
+                        {
+                        case 'N':
+                            task_status = TaskStaus::None;
+                            break;
+
+                        case 'P':
+                            task_status = TaskStaus::Progress;
+                            break;
+
+                        case 'D':
+                            task_status = TaskStaus::Done;
+                            break;
+
+                        case 'E':
+                            task_status = TaskStaus::End;
+                            break;
+
+                        default:
+                            task_status = TaskStaus::None;
+                            break;
+                        }
+
+                        menu_manager.AddToDo(task_status, line2);
+                    }
+                }
+                else
+                {
+                    std::cout << lsm.load_error_message << std::endl;
+                }
+
+                return Result::Done;
+            }
         )
         ;
 
