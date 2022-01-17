@@ -1,3 +1,4 @@
+#include "ItemTree.h"
 #include <iostream>
 #include <format>
 #include <string>
@@ -7,14 +8,18 @@
 #include <ranges>
 #include <list>
 #include <sstream>
+#include <functional>
+#include <optional>
 
 struct Strings
 {
+    char const* menu;
     char const* exit;
     char const* list_todo_items;
     char const* add_todo_item;
     char const* remove_todo_item;
     char const* manage_todo_item;
+    char const* edit_todo_item;
     char const* save_todo_list;
     char const* load_todo_list;
     char const* selection;
@@ -33,19 +38,26 @@ struct Strings
     char const* status3;
     char const* current_status_message;
     char const* content_modification_message;
+    char const* succeeded;
+    char const* failed;
+    char const* go_main_menu;
+    char const* exit_message;
+    char const* menu_selection_message;
 };
 
 Strings kor_strings{
+    .menu{ "-= ToDo 리스트 메뉴 =-" },
     .exit{ "종료" },
     .list_todo_items{ "ToDo List 확인" },
     .add_todo_item{ "ToDo 추가" },
     .remove_todo_item{ "ToDo 삭제" },
     .manage_todo_item{ "ToDo 관리" },
+    .edit_todo_item{ " ToDo 편집 메뉴" },
     .save_todo_list{ "저장" },
     .load_todo_list{ "불러오기" },
     .selection{ "작업선택" },
     .error_message{ "잘못 입력하셨습니다." },
-    .add_message{ "ToDo내용을 입력 해 주세요" },
+    .add_message{ "ToDo 내용을 입력 해 주세요" },
     .remove_message{ "삭제할 ToDo의 번호를 입력 해 주세요" },
     .empty_message{ "Todo List가 비어있습니다." },
     .go_back{ "뒤로가기" },
@@ -58,7 +70,12 @@ Strings kor_strings{
     .status2{ "진행중" },
     .status3{ "완료" },
     .current_status_message{ "현재 상태를 입력 해 주세요" },
-    .content_modification_message{ "ToDo 메시지를 편집합니다." }
+    .content_modification_message{ "ToDo 내용 편집합니다" },
+    .succeeded{ "작업을 완료했습니다." },
+    .failed{ "작업을 실패했습니다." },
+    .go_main_menu{ "메인 메뉴로 돌아가시겠습니까(Y/N)? " },
+    .exit_message{ "프로그램을 종료합니다." },
+    .menu_selection_message{ "원하는 메뉴의 번호를 입력 해 주세요" }
 };
 
 class LocalizedString
@@ -75,16 +92,11 @@ public:
     LocalizedString& operator=(LocalizedString const&) = delete;
     LocalizedString& operator=(LocalizedString&&) = delete;
 
-    static LocalizedString& GetInstance(Language language = Language::Korea)
+    static Strings const& Get(Language language = Language::Korea)
     {
         static LocalizedString instance(language);
 
-        return instance;
-    }
-
-    Strings const& GetStrings() const
-    {
-        return strs;
+        return instance.strs;
     }
 
     void SetLanguage(Language language)
@@ -113,7 +125,7 @@ private:
 enum class TaskStaus
 {
     None,
-    Prograss,
+    Progress,
     Done,
     End
 };
@@ -135,8 +147,8 @@ std::basic_ostream<Elem, Traits>& operator<<(std::basic_ostream<Elem, Traits>& o
         os << "None";
         break;
 
-    case TaskStaus::Prograss:
-        os << "Prograss";
+    case TaskStaus::Progress:
+        os << "Progress";
         break;
 
     case TaskStaus::Done:
@@ -159,10 +171,9 @@ std::basic_ostream<Elem, Traits>& operator<<(std::basic_ostream<Elem, Traits>& o
 template <typename Elem, typename Traits = std::char_traits<Elem>>
 std::basic_ostream<Elem, Traits>& operator<<(std::basic_ostream<Elem, Traits>& os, std::list<ToDoItem> const& todo_list)
 {
-    for (auto i{ 0 }; auto const& e : todo_list)
+    for (auto const& e : todo_list)
     {
-        os << std::format("{} : {}\n", ++i, e);
-        //os << ++i << " : " << e << "\n";
+        os << e << '\n';
     }
 
     return os;
@@ -188,8 +199,8 @@ namespace std
             case TaskStaus::None:
                 return std::format_to(fc.out(), "None");
 
-            case TaskStaus::Prograss:
-                return std::format_to(fc.out(), "Prograss");
+            case TaskStaus::Progress:
+                return std::format_to(fc.out(), "Progress");
 
             case TaskStaus::Done:
                 return std::format_to(fc.out(), "Done");
@@ -221,267 +232,510 @@ namespace std
     };
 }
 
-void PrintMenu()
+struct History;
+class MenuManager;
+
+enum class Result
 {
-    auto const& lsm{ LocalizedString::GetInstance().GetStrings() };
+    Done,
+    Failed,
+    GoBack,
+    Exit
+};
 
-    std::cout << "-= Menu =-\n";
-    std::cout << std::format("0. {}\n", lsm.exit);
-    std::cout << std::format("1. {}\n", lsm.list_todo_items);
-    std::cout << std::format("2. {}\n", lsm.add_todo_item);
-    std::cout << std::format("3. {}\n", lsm.remove_todo_item);
-    std::cout << std::format("4. {}\n", lsm.manage_todo_item);
-    std::cout << std::format("5. {}\n", lsm.save_todo_list);
-    std::cout << std::format("6. {}\n", lsm.load_todo_list);
-    std::cout << std::format("{} : ", lsm.selection);
-}
+using ToDoList = std::list<ToDoItem>;
+using Action = std::function<Result(MenuManager&)>;
 
-int main()
+class MenuItem
 {
-    using enum TaskStaus;
+public:
+    MenuItem() = default;
 
-    auto const& lsm{ LocalizedString::GetInstance().GetStrings() };
-    std::list<ToDoItem> todo_list;
-
-    PrintMenu();
-
-    for (std::string line; std::getline(std::cin, line) ; PrintMenu())
+    explicit MenuItem(std::string_view title, Action const& action)
+        : title{ title }, action{ action }
     {
-        try
+
+    }
+
+    ~MenuItem() = default;
+
+    std::string_view GetTitle() const
+    {
+        return title;
+    }
+
+    Result operator()(MenuManager& menu_manager) const
+    {
+        return std::invoke(action, menu_manager);
+    }
+
+private:
+    std::string title;
+    Action action;
+};
+
+class SubMenuItem
+{
+public:
+    SubMenuItem() = default;
+
+    explicit SubMenuItem(std::string_view title)
+        : title{ title }
+    {
+
+    }
+
+    ~SubMenuItem() = default;
+
+    std::string_view GetTitle() const
+    {
+        return title;
+    }
+
+private:
+    std::string title;
+};
+
+struct History
+    : std::vector<std::pair<ItemTree<MenuItem, SubMenuItem>*, int>>
+{
+
+};
+
+template<class... Ts> 
+struct Overloaded 
+    : Ts... 
+{ 
+    using Ts::operator()...;
+};
+
+class MenuManager
+{
+public:
+    template <typename U>
+        requires std::is_same_v<std::remove_cvref_t<U>, MenuItem>
+    Result operator()(U&& menu_item)
+    {
+        auto const& lsm{ LocalizedString::Get() };
+
+        if (auto result{ std::invoke(std::forward<U>(menu_item), *this) }; result != Result::Failed)
         {
-            auto const i{ std::stol(line) };
-
-            switch (i)
+            if (result == Result::Done)
             {
-            case 0:
-                return 0;
-                
-            case 1:
-                if (std::empty(todo_list))
-                {
-                    std::cout << lsm.empty_message << std::endl;
-                }
-                else
-                {
-                    std::cout << todo_list;
-                }
-                break;
+                std::cout << lsm.succeeded << std::endl;
+            }
 
-            case 2:
-                std::cout << std::format("{} : ", lsm.add_message);
-                
-                if (std::getline(std::cin, line))
-                {
-                    todo_list.emplace_back(None, line);
-                }
-                else
-                {
-                    std::cerr << lsm.error_message << std::endl;
-                }
-                break;
+            return result;
+        }
+        else
+        {
+            std::cout << lsm.failed << std::endl;
 
-            case 3:
-                if (std::empty(todo_list))
-                {
-                    std::cout << lsm.empty_message << std::endl;
-                    
-                    break;
-                }
-                else
-                {
-                    std::cout << std::format("0. {}\n", lsm.go_back);
-                    std::cout << todo_list;
-                }
+            while (true)
+            {
+                std::cout << lsm.go_main_menu;
 
-                std::cout << std::format("{} : ", lsm.remove_message);
-
-                if (std::getline(std::cin, line))
+                if (std::string line; std::getline(std::cin, line))
                 {
                     try
                     {
-                        auto const i{ std::stol(line) };
-
-                        if (i == 0)
+                        if (std::size(line) == 1)
                         {
-                            continue;
-                        }
+                            auto const answer{ std::toupper(line.front()) };
 
-                        if (0 < i and i <= std::ssize(todo_list))
-                        {
-                            todo_list.erase(std::next(std::begin(todo_list), i - 1));
-                        }
-                        else
-                        {
-                            std::cerr << lsm.error_message << std::endl;
-                        }
-                    }
-                    catch (std::exception const& e)
-                    {
-                        std::cerr << e.what() << std::endl;
-                    }
-                }
-                else
-                {
-                    std::cerr << lsm.error_message << std::endl;
-                }
-                break;
-
-            case 4:
-            {
-                auto end_flag{ false };
-
-                while (!end_flag)
-                {
-                    if (std::empty(todo_list))
-                    {
-                        std::cout << std::format("0. {}\n", lsm.go_back);
-                        std::cout << lsm.empty_message << std::endl;
-
-                        break;
-                    }
-                    else
-                    {
-                        std::cout << todo_list;
-                        std::cout << std::format("{} : ", lsm.modification_message);
-                    }
-
-                    if (std::getline(std::cin, line))
-                    {
-                        try
-                        {
-                            auto i{ std::stoi(line) };
-
-                            if (i == 0)
+                            if (answer == 'Y')
                             {
-                                end_flag = true;
-
                                 break;
                             }
-
-                            if (0 < i and i <= std::ssize(todo_list))
+                            else if (answer == 'N')
                             {
-                                auto end_flag2{ false };
-
-                                while (!end_flag2)
-                                {
-                                    std::cout << std::format("0. {}\n", lsm.go_back);
-                                    std::cout << std::format("1. {}\n", lsm.status_modification);
-                                    std::cout << std::format("2. {}\n", lsm.content_modification);
-                                    std::cout << std::format("{} : ", lsm.modification_message);
-
-                                    if (std::getline(std::cin, line))
-                                    {
-                                        try
-                                        {
-                                            switch (std::stoi(line))
-                                            {
-                                            case 0:
-                                                end_flag2 = true;
-                                                break;
-
-                                            case 1:
-                                            {
-                                                auto end_flag3{ false };
-
-                                                while (!end_flag3)
-                                                {
-                                                    std::cout << lsm.status_modification_message << std::endl;
-                                                    std::cout << std::format("0. {}\n", lsm.go_back);
-                                                    std::cout << std::format("1. {}\n", lsm.status1);
-                                                    std::cout << std::format("2. {}\n", lsm.status2);
-                                                    std::cout << std::format("3. {}\n", lsm.status3);
-                                                    std::cout << std::format("{} : ", lsm.current_status_message);
-
-                                                    if (std::getline(std::cin, line))
-                                                    {
-                                                        try
-                                                        {
-                                                            switch (std::stoi(line))
-                                                            {
-                                                            case 0:
-                                                                end_flag3 = true;
-                                                                break;
-
-                                                            case 1:
-                                                                [[fallthrough]];
-                                                            case 2:
-                                                                [[fallthrough]];
-                                                            case 3:
-                                                                std::next(std::begin(todo_list), i - 1)->status = static_cast<TaskStaus>(i);
-                                                                end_flag = true;
-                                                                end_flag2 = true;
-                                                                end_flag3 = true;
-                                                                break;
-                                                            }
-                                                        }
-                                                        catch (std::exception const& e)
-                                                        {
-                                                            std::cerr << e.what() << std::endl;
-                                                        }
-                                                    }
-                                                }
-
-                                                break;
-                                            }
-
-                                            case 2:
-                                                std::cout << lsm.content_modification_message << std::endl;
-                                                std::cout << std::format("{} : ", lsm.current_status_message);
-
-                                                if (std::getline(std::cin, line))
-                                                {
-                                                    std::next(std::begin(todo_list), i - 1)->content = line;
-                                                    end_flag = true;
-                                                    end_flag2 = true;
-       
-                                                }
-
-                                                break;
-
-                                            default:
-                                                std::cerr << lsm.error_message << std::endl;
-                                                break;
-                                            }
-                                        }
-                                        catch (std::exception const& e)
-                                        {
-                                            std::cerr << e.what() << std::endl;
-                                        }
-                                    }
-                                    else
-                                    {
-                                        std::cerr << lsm.error_message << std::endl;
-                                    }
-                                }
+                                return Result::GoBack;
                             }
                             else
                             {
-                                std::cerr << lsm.error_message << std::endl;
+                                std::cout << lsm.error_message << std::endl;
                             }
                         }
-                        catch (std::exception const& e)
-                        {
-                            std::cerr << e.what() << std::endl;
-                        }  
+                    }
+                    catch (...)
+                    {
+                        std::cout << lsm.error_message << std::endl;
                     }
                 }
-                
-                break;
-            }   
-            case 5:
-                break;
+            }
 
-            case 6:
-                break;
+            return Result::Done;   
+        }
+    }
 
-            default:
-                std::cout << lsm.error_message << std::endl;
+    template <typename U>
+        requires std::is_same_v<std::remove_cvref_t<U>, ItemTree<MenuItem, SubMenuItem>>
+    Result operator()(U&& item_tree)
+    {
+        auto end_flag{ false };
+        std::optional<int> i;
+
+        while (!end_flag)
+        {
+            auto const menu_count{ PrintMenu(std::forward<U>(item_tree)) };
+
+            i = SelectMenuItem(menu_count);
+
+            if (i)
+            {
+                end_flag = true;
+            }
+            else
+            {
+                std::cout << LocalizedString::Get().error_message << std::endl;
+            }
+        }
+
+        if (*i == 0)
+        {
+            if (std::empty(history))
+            {
+                return Result::Exit;
+            }
+            else
+            {
+                return Result::GoBack;
+            }
+        }
+
+        if (auto result{ GoNext(item_tree, *i) }; result == Result::GoBack)
+        {
+            return GoBack();
+        }
+        else
+        {
+            history.pop_back();
+
+            return result;
+        }
+    }
+
+    int PrintToDoList() const
+    {
+        auto i{ 0 };
+
+        if (auto const& lsm{ LocalizedString::Get() }; std::empty(todo_list))
+        {
+            std::cout << lsm.empty_message << std::endl;
+        }
+        else
+        {
+            for (auto const& todo : todo_list)
+            {
+                std::cout << std::format("{}. {}\n", ++i, todo);
+            }
+        }
+
+        return i;
+    }
+
+    decltype(auto) AddToDo(TaskStaus task_status, std::string_view content)
+    {
+        return todo_list.emplace_back(task_status, std::data(content));
+    }
+
+    auto GetToDoCount() const
+    {
+        return std::size(todo_list);
+    }
+
+    auto EraseToDo(int i) noexcept
+    {
+        return todo_list.erase(std::next(std::begin(todo_list), i - 1));
+    }
+
+    std::optional<int> SelectMenuItem(int menu_count) const
+    {
+        for (std::string line; std::getline(std::cin, line);)
+        {
+            try
+            {
+                if (auto i{ std::stoi(line) }; 0 <= i && i <= menu_count)
+                {
+                    return i;
+                }
+                else
+                {
+                    break;
+                }
+            }
+            catch (...)
+            {
                 break;
             }
         }
-        catch (std::exception const& e)
+
+        return std::nullopt;
+    }
+
+    void SetToDoStatus(int todo_item_index, TaskStaus task_status)
+    {
+        std::next(std::begin(todo_list), todo_item_index - 1)->status = task_status;
+    }
+
+    void SetToDoContent(int todo_item_index, std::string_view content)
+    {
+        std::next(std::begin(todo_list), todo_item_index - 1)->content = content;
+    }
+
+    template <typename Func>
+    auto LineProcessing(Func&& func)
+    {
+        auto const& lsm{ LocalizedString::Get() };
+
+        if (std::string line; std::getline(std::cin, line))
         {
-            std::cerr << e.what() << std::endl;
+            return std::invoke(std::forward<Func>(func), std::move(line));
+        }
+        else
+        {
+            std::cerr << lsm.error_message << std::endl;
+
+            return Result::Failed;
         }
     }
+
+private:
+    ToDoList todo_list;
+    History history;
+
+    int PrintMenu(ItemTree<MenuItem, SubMenuItem> const& item_tree) const
+    {
+        auto const& lsm{ LocalizedString::Get() };
+
+        std::cout << item_tree.item.GetTitle() << '\n';
+
+        auto i{ 0 };
+
+        std::cout << std::format("0. {}\n",
+            std::empty(history) ? lsm.exit : lsm.go_back
+        );
+
+        for (auto const& item : item_tree)
+        {
+            std::visit(Overloaded{
+            [&i](MenuItem const& menu_item) { std::cout << std::format("{}. {}\n", ++i, menu_item.GetTitle()); },
+            [&i](ItemTree<MenuItem, SubMenuItem> const& sub_menu) { std::cout << std::format("{}. {}\n", ++i, sub_menu.item.GetTitle()); }
+                }, item);
+        }
+
+        std::cout << lsm.menu_selection_message << " : ";
+
+        return i;
+    }
+
+    Result GoBack()
+    {
+        auto [prev_menu, _] { history.back()};
+
+        history.pop_back();
+
+        return std::invoke(std::ref(*this), *prev_menu);
+
+    }
+
+    Result GoNext(ItemTree<MenuItem, SubMenuItem>& item_tree, int i)
+    {
+        history.emplace_back(&item_tree, i);
+
+        return std::visit(std::ref(*this), item_tree[i - 1]);
+    }
+};
+
+int main()
+{
+    auto const& lsm{ LocalizedString::Get() };
+    auto menu{ ItemTree<MenuItem, SubMenuItem>(lsm.menu) };
+    auto callback{ [](std::string_view msg) {
+        return [msg](MenuManager& menu_manager) {
+            std::cout << msg << std::endl;
+
+            return Result::Done;
+        };
+    } };
+
+    menu
+        // 1. ToDo List 출력
+        .Add(
+            lsm.list_todo_items,
+            [](MenuManager& menu_manager) {
+                std::cout << std::format("> {}\n", LocalizedString::Get().list_todo_items);
+
+                menu_manager.PrintToDoList();
+
+                return Result::Done;
+            }
+        )
+        // 2. ToDo 추가
+        .Add(
+            lsm.add_todo_item,
+            [](MenuManager& menu_manager) {
+                auto const& lsm{ LocalizedString::Get() };
+
+                std::cout << std::format("{} : ", lsm.add_message);
+
+                return menu_manager.LineProcessing([&](std::string&& line) {
+                    menu_manager.AddToDo(TaskStaus::None, line);
+
+                    return Result::Done;
+                });
+            }
+        )
+        // 3. ToDo 제거
+        .Add(
+            lsm.remove_todo_item,
+            [](MenuManager& menu_manager) {
+                auto const& lsm{ LocalizedString::Get() };
+                auto menu_count{ 0 };
+
+                while (true)
+                {
+                    if (menu_manager.GetToDoCount() == 0)
+                    {
+                        std::cout << lsm.empty_message << std::endl;
+
+                        return Result::Done;
+                    }
+                    else
+                    {
+                        std::cout << std::format("0. {}\n", lsm.go_back);
+                        menu_count = menu_manager.PrintToDoList();
+                    }
+
+                    std::cout << std::format("{} : ", lsm.remove_message);
+
+                    if (auto i{ menu_manager.SelectMenuItem(menu_count) })
+                    {
+                        if (*i == 0)
+                        {
+                            return Result::GoBack;
+                        }
+
+                        menu_manager.EraseToDo(*i);
+
+                        return Result::Done;
+                    }
+
+                    std::cerr << lsm.error_message << std::endl;
+                }
+            }
+        )
+        // 4. ToDo 관리
+        .Add(
+            lsm.manage_todo_item,
+            [](MenuManager& menu_manager) {
+                auto const& lsm{ LocalizedString::Get() };
+                auto menu_count{ 0 };
+
+                while (true)
+                {
+                    if (menu_manager.GetToDoCount() == 0)
+                    {
+                        std::cout << lsm.empty_message << std::endl;
+
+                        return Result::Done;
+                    }
+                    else
+                    {
+                        std::cout << std::format("0. {}\n", lsm.go_back);
+                        menu_count = menu_manager.PrintToDoList();
+                    }
+
+                    std::cout << std::format("{} : ", lsm.modification_message);
+
+                    if (auto const i{ menu_manager.SelectMenuItem(menu_count) })
+                    {
+                        if (*i == 0)
+                        {
+                            return Result::GoBack;
+                        }
+
+                        auto const result{ menu_manager(
+                            ItemTree<MenuItem, SubMenuItem>(lsm.edit_todo_item)
+                            .Add(
+                                ItemTree<MenuItem, SubMenuItem>(lsm.status_modification)
+                                .Add(
+                                    lsm.status1,
+                                    [i = *i](MenuManager& menu_manager) {
+                                        menu_manager.SetToDoStatus(i, TaskStaus::None);
+
+                                        return Result::Done;
+                                    }
+                                )
+                                .Add(
+                                    lsm.status2,
+                                    [i = *i](MenuManager& menu_manager) {
+                                        menu_manager.SetToDoStatus(i, TaskStaus::Progress);
+
+                                        return Result::Done;
+                                    }
+                                )
+                                .Add(
+                                    lsm.status3,
+                                    [i = *i](MenuManager& menu_manager) {
+                                        menu_manager.SetToDoStatus(i, TaskStaus::Done);
+
+                                        return Result::Done;
+                                    }
+                                )
+                            )
+                            .Add(
+                                lsm.content_modification,
+                                [i = *i](MenuManager& menu_manager) {
+                                    auto const& lsm{ LocalizedString::Get() };
+
+                                    std::cout << std::format("{} : ", lsm.content_modification_message);
+
+                                    return menu_manager.LineProcessing([&](std::string&& line) {
+                                        menu_manager.SetToDoContent(i, line);
+
+                                        return Result::Done;
+                                    });
+                                }
+                            )
+                        ) };
+
+                        switch (result)
+                        {
+                        case Result::Done:
+                            [[fallthrough]];
+                        case Result::Failed:
+                            [[fallthrough]];
+                        case Result::Exit:
+                            return result;
+
+                        case Result::GoBack:
+                            break;
+
+                        default:
+                            break;
+                        }
+                    }
+
+                    std::cerr << lsm.error_message << std::endl;
+                }
+            }
+        )
+        // 5. ToDo List 저장
+        .Add(
+            lsm.save_todo_list,
+            callback(lsm.save_todo_list)
+        )
+        // 6. ToDo List 열기
+        .Add(
+            lsm.load_todo_list,
+            callback(lsm.load_todo_list)
+        )
+        ;
+
+    MenuManager menu_manager;
+
+    while (menu_manager(menu) != Result::Exit);
+
+    std::cout << lsm.exit_message << std::endl;
 }
