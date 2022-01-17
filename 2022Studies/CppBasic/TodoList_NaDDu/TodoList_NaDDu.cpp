@@ -190,43 +190,6 @@ std::basic_ostream<Elem, Traits>& operator<<(std::basic_ostream<Elem, Traits>& o
     return os;
 }
 
-//template <typename Elem, typename Traits = std::char_traits<Elem>>
-//std::basic_istream<Elem, Traits>& operator>>(std::basic_istream<Elem, Traits>& is, ToDoItem& todo_item)
-//{
-//    if (std::string line; std::getline(is, line))
-//    {
-//        switch (line.front())
-//        {
-//        case 'N':
-//            task_status = TaskStaus::None;
-//            break;
-//
-//        case 'P':
-//            task_status = TaskStaus::Progress;
-//            break;
-//
-//        case 'D':
-//            task_status = TaskStaus::Done;
-//            break;
-//
-//        case 'E':
-//            task_status = TaskStaus::End;
-//            break;
-//
-//        default:
-//            task_status = TaskStaus::None;
-//            break;
-//        }
-//    }
-//
-//    if (std::string line; std::getline(is, line))
-//    {
-//        todo_item.content = std::move(line);
-//    }
-//
-//    return is;
-//}
-
 namespace std
 {
     template<class CharT>
